@@ -245,10 +245,30 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
         onNodeClick={handleNodeClick}
         nodeColor={nodeColor}
         nodeLabel={nodeLabel}
-        linkDirectionalArrowLength={6}
-        linkDirectionalArrowRelPos={1}
+        linkDirectionalArrowLength={0}
         linkCurvature={0.15}
-        linkColor={() => 'rgba(100, 100, 100, 0.6)'}
+        linkColor={(link: any) => {
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          const playerNodeId = `player-${playerId}`;
+          
+          // Make edges connected to starting player more visible
+          if (sourceId === playerNodeId || targetId === playerNodeId) {
+            return 'rgba(50, 50, 50, 0.8)'; // Darker, more opaque
+          }
+          return 'rgba(150, 150, 150, 0.4)'; // Lighter for other edges
+        }}
+        linkWidth={(link: any) => {
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          const playerNodeId = `player-${playerId}`;
+          
+          // Thicker edges for starting player connections
+          if (sourceId === playerNodeId || targetId === playerNodeId) {
+            return 2.5;
+          }
+          return 1.5;
+        }}
         backgroundColor="rgba(249, 250, 251, 0)"
         nodeCanvasObjectMode={() => 'after'}
         nodeCanvasObject={(node, ctx, globalScale) => {
