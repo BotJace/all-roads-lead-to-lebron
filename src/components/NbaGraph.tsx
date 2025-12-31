@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { GraphNode, GraphLink, PlayerCareerRecord, TeamRosterRecord } from '@/types/nba';
 
@@ -28,14 +28,18 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [playerName, setPlayerName] = useState<string>('');
+  const graphRef = useRef<any>(null);
 
-  // Initialize with just the player node
+
+  // Initialize with just the player node (fixed at center, immovable)
   useEffect(() => {
     const playerNode: GraphNode = {
       id: `player-${playerId}`,
       type: 'player',
       label: `Player ${playerId}`,
       playerId,
+      fx: 0, // Fix at center initially (force graph centers at 0,0) - immovable
+      fy: 0,
     };
     setNodes([playerNode]);
     setLinks([]);
@@ -78,28 +82,41 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
           season: record.SEASON_ID,
         });
 
-        // Link player to team-season
+        // Link player to team-season (so edges are visible when seasons are shown)
         newLinks.push({
-          source: `player-${playerId}`,
-          target: teamSeasonId,
+          source: `player-${playerId}` as any,
+          target: teamSeasonId as any,
           season: record.SEASON_ID,
           teamAbbr: record.TEAM_ABBREVIATION,
         });
       });
 
-      // Add season nodes and links
+      // Add season nodes and links, preserve starting player's fixed position
       setNodes(prevNodes => {
         const existingIds = new Set(prevNodes.map(n => n.id));
         const nodesToAdd = teamSeasonNodes.filter(n => !existingIds.has(n.id));
-        return [...prevNodes, ...nodesToAdd];
+        // Preserve starting player's fixed position at (0, 0)
+        const preservedNodes = prevNodes.map(n => {
+          if (n.id === `player-${playerId}`) {
+            return { ...n, fx: 0, fy: 0 };
+          }
+          return n;
+        });
+        
+        return [...preservedNodes, ...nodesToAdd];
       });
 
       setLinks(prevLinks => {
-        const existingLinkKeys = new Set(
-          prevLinks.map(l => `${String(l.source)}-${String(l.target)}`)
-        );
+        // Helper function to normalize link endpoints (handle both strings and objects)
+        const getLinkKey = (link: GraphLink) => {
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          return `${sourceId}-${targetId}`;
+        };
+        
+        const existingLinkKeys = new Set(prevLinks.map(getLinkKey));
         const uniqueNewLinks = newLinks.filter(
-          l => !existingLinkKeys.has(`${String(l.source)}-${String(l.target)}`)
+          l => !existingLinkKeys.has(getLinkKey(l))
         );
         return [...prevLinks, ...uniqueNewLinks];
       });
@@ -150,13 +167,9 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
 
       rosterData.forEach((teammate) => {
         const teammateNodeId = `player-${teammate.PLAYER_ID}`;
+        const isStartingPlayer = teammate.PLAYER_ID === playerId;
         
-        // Skip the main player (they're already in the graph)
-        if (teammate.PLAYER_ID === playerId) {
-          return;
-        }
-        
-        // Add teammate node if it doesn't exist
+        // Add teammate node if it doesn't exist (including the starting player)
         if (!existingNodeIds.has(teammateNodeId)) {
           newNodes.push({
             id: teammateNodeId,
@@ -168,29 +181,43 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
           existingNodeIds.add(teammateNodeId); // Track it so we don't add duplicates
         }
 
-        // Link teammate to team-season
+        // Link teammate to team-season (use string IDs for consistency)
+        // This includes the starting player, so they connect to the team like other players
         newLinks.push({
-          source: teammateNodeId,
-          target: teamSeasonId,
+          source: teammateNodeId as any,
+          target: teamSeasonId as any,
           season,
           teamAbbr: teamAbbr,
         });
       });
 
-      // Add new nodes
+      // Add new nodes, preserve starting player's fixed position
       setNodes(prevNodes => {
         const existingIds = new Set(prevNodes.map(n => n.id));
         const nodesToAdd = newNodes.filter(n => !existingIds.has(n.id));
-        return [...prevNodes, ...nodesToAdd];
+        // Preserve starting player's fixed position at (0, 0)
+        const preservedNodes = prevNodes.map(n => {
+          if (n.id === `player-${playerId}`) {
+            return { ...n, fx: 0, fy: 0 };
+          }
+          return n;
+        });
+        
+        return [...preservedNodes, ...nodesToAdd];
       });
 
       // Add new links
       setLinks(prevLinks => {
-        const existingLinkKeys = new Set(
-          prevLinks.map(l => `${String(l.source)}-${String(l.target)}`)
-        );
+        // Helper function to normalize link endpoints (handle both strings and objects)
+        const getLinkKey = (link: GraphLink) => {
+          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          return `${sourceId}-${targetId}`;
+        };
+        
+        const existingLinkKeys = new Set(prevLinks.map(getLinkKey));
         const uniqueNewLinks = newLinks.filter(
-          l => !existingLinkKeys.has(`${String(l.source)}-${String(l.target)}`)
+          l => !existingLinkKeys.has(getLinkKey(l))
         );
         return [...prevLinks, ...uniqueNewLinks];
       });
@@ -219,10 +246,11 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
 
   const nodeColor = useCallback((node: any) => {
     const graphNode = node as GraphNode;
+    // High contrast colors
     if (graphNode.type === 'player' && graphNode.playerId === playerId) {
-      return '#10b981'; // Green for main player
+      return '#10b981'; // Green for starting player
     }
-    return graphNode.type === 'player' ? '#2563eb' : '#dc2626'; // Bright blue for players, bright red for seasons
+    return graphNode.type === 'player' ? '#2563eb' : '#dc2626'; // Blue for players, red for teams
   }, [playerId]);
 
   const nodeLabel = useCallback((node: any) => {
@@ -241,52 +269,91 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
   return (
     <div className="w-full h-screen relative bg-white">
       <ForceGraph2D
+        ref={graphRef}
         graphData={{ nodes, links }}
         onNodeClick={handleNodeClick}
+        onNodeDrag={(node: any) => {
+          const graphNode = node as GraphNode;
+          // Keep starting player fixed at (0, 0) - prevent dragging
+          if (graphNode.playerId === playerId) {
+            node.fx = 0;
+            node.fy = 0;
+            node.x = 0;
+            node.y = 0;
+          }
+        }}
         nodeColor={nodeColor}
         nodeLabel={nodeLabel}
         linkDirectionalArrowLength={0}
-        linkCurvature={0.15}
+        linkCurvature={0}
         linkColor={(link: any) => {
-          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
-          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          // Normalize source/target to handle both objects and strings
+          const getNodeId = (node: any) => {
+            if (typeof node === 'object' && node !== null && 'id' in node) {
+              return node.id;
+            }
+            return String(node);
+          };
+          const sourceId = getNodeId(link.source);
+          const targetId = getNodeId(link.target);
           const playerNodeId = `player-${playerId}`;
           
-          // Make edges connected to starting player more visible
+          // They Rule style: Clean, subtle lines with emphasis on starting player
           if (sourceId === playerNodeId || targetId === playerNodeId) {
-            return 'rgba(50, 50, 50, 0.8)'; // Darker, more opaque
+            return '#2d3748'; // Dark gray for starting player connections
           }
-          return 'rgba(150, 150, 150, 0.4)'; // Lighter for other edges
+          return 'rgba(100, 100, 100, 0.5)'; // Subtle gray for other edges
         }}
         linkWidth={(link: any) => {
-          const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
-          const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+          // Normalize source/target to handle both objects and strings
+          const getNodeId = (node: any) => {
+            if (typeof node === 'object' && node !== null && 'id' in node) {
+              return node.id;
+            }
+            return String(node);
+          };
+          const sourceId = getNodeId(link.source);
+          const targetId = getNodeId(link.target);
           const playerNodeId = `player-${playerId}`;
           
-          // Thicker edges for starting player connections
+          // They Rule style: Thinner, cleaner lines
           if (sourceId === playerNodeId || targetId === playerNodeId) {
-            return 2.5;
+            return 2.5; // Slightly thicker for starting player
           }
-          return 1.5;
+          return 1; // Thin, clean lines
         }}
+        // Edges automatically follow nodes dynamically (this is how force graphs work)
+        // Increase node visual size to give each node more space
+        nodeRelSize={8} // Larger nodes = more visual spacing
+        onEngineTick={() => {
+          // Configure force simulation for increased node spacing
+          if (graphRef.current) {
+            const graph = graphRef.current as any;
+            // Increase link distance for more spacing between connected nodes
+            const linkForce = graph.d3Force?.('link');
+            if (linkForce) {
+              linkForce.distance(150); // Increased from default ~30
+            }
+            // Increase charge (repulsion) for more spacing between all nodes
+            const chargeForce = graph.d3Force?.('charge');
+            if (chargeForce) {
+              chargeForce.strength(-500); // Increased repulsion
+            }
+          }
+        }}
+        cooldownTicks={100}
         backgroundColor="rgba(249, 250, 251, 0)"
         nodeCanvasObjectMode={() => 'after'}
         nodeCanvasObject={(node, ctx, globalScale) => {
           const graphNode = node as GraphNode;
           const label = nodeLabel(graphNode);
-          const fontSize = 14 / globalScale;
-          ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+          const fontSize = 12 / globalScale;
+          // They Rule style: Clean, simple typography
+          ctx.font = `${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          
-          // Add text shadow for better visibility
-          ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
-          ctx.shadowBlur = 4;
-          ctx.fillStyle = '#1f2937'; // Dark gray for better contrast
-          ctx.fillText(label, graphNode.x || 0, (graphNode.y || 0) + 5);
-          
-          // Reset shadow
-          ctx.shadowBlur = 0;
+          ctx.fillStyle = '#2d3748'; // Dark gray text
+          ctx.fillText(label, graphNode.x || 0, (graphNode.y || 0) + 4);
         }}
       />
       

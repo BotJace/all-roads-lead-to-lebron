@@ -68,6 +68,8 @@ export interface GraphNode {
   y?: number;
   vx?: number;
   vy?: number;
+  fx?: number; // Fixed x-coordinate (for pinning nodes)
+  fy?: number; // Fixed y-coordinate (for pinning nodes)
 }
 
 export interface GraphLink {
