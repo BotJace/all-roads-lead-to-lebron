@@ -25,6 +25,7 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [links, setLinks] = useState<GraphLink[]>([]);
   const [loadedTeamSeasons, setLoadedTeamSeasons] = useState<Set<string>>(new Set());
+  const [expandedPlayers, setExpandedPlayers] = useState<Set<number>>(new Set()); // Track which players have had their teams expanded
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [playerNames, setPlayerNames] = useState<Record<number, string>>({});
@@ -60,14 +61,21 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
     };
     setNodes([playerNode]);
     setLinks([]);
+    setExpandedPlayers(new Set()); // Reset expanded players when starting player changes
+    setLoadedTeamSeasons(new Set()); // Reset loaded team seasons
     setLoading(false);
   }, [playerId, playerNames]);
 
-  // Load player's last 3 seasons when player node is clicked
-  const loadPlayerSeasons = useCallback(async (playerId: number) => {
+  // Load player's seasons (works for any player, not just starting player)
+  const loadPlayerSeasons = useCallback(async (targetPlayerId: number) => {
+    // Skip if this player has already been expanded
+    if (expandedPlayers.has(targetPlayerId)) {
+      return;
+    }
+
     try {
-      const response = await fetch(`/data/players/${playerId}.json`);
-      if (!response.ok) throw new Error(`Failed to load player ${playerId}`);
+      const response = await fetch(`/data/players/${targetPlayerId}.json`);
+      if (!response.ok) throw new Error(`Failed to load player ${targetPlayerId}`);
       
       const careerData: PlayerCareerRecord[] = await response.json();
       
@@ -83,35 +91,37 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
         .sort((a, b) => b.SEASON_ID.localeCompare(a.SEASON_ID))
         .slice(0, 3); // Last 3 seasons only
 
-      // Create team-season nodes
-      const teamSeasonNodes: GraphNode[] = [];
-      const newLinks: GraphLink[] = [];
-
-      uniqueSeasons.forEach((record) => {
-        const teamSeasonId = `team-${record.TEAM_ID}-${record.SEASON_ID}`;
-        
-        teamSeasonNodes.push({
-          id: teamSeasonId,
-          type: 'team-season',
-          label: `${record.TEAM_ABBREVIATION} ${record.SEASON_ID}`,
-          teamId: record.TEAM_ID,
-          teamAbbr: record.TEAM_ABBREVIATION,
-          season: record.SEASON_ID,
-        });
-
-        // Link player to team-season (so edges are visible when seasons are shown)
-        newLinks.push({
-          source: `player-${playerId}` as any,
-          target: teamSeasonId as any,
-          season: record.SEASON_ID,
-          teamAbbr: record.TEAM_ABBREVIATION,
-        });
-      });
-
-      // Add season nodes and links, preserve starting player's fixed position
+      // Get current nodes to check which team-seasons already exist
       setNodes(prevNodes => {
+        const existingTeamSeasonIds = new Set(
+          prevNodes
+            .filter(n => n.type === 'team-season')
+            .map(n => n.id)
+        );
+
+        // Create team-season nodes (only for ones that don't already exist)
+        const teamSeasonNodes: GraphNode[] = [];
+
+        uniqueSeasons.forEach((record) => {
+          const teamSeasonId = `team-${record.TEAM_ID}-${record.SEASON_ID}`;
+          
+          // Skip if this team-season is already visualized
+          if (!existingTeamSeasonIds.has(teamSeasonId)) {
+            teamSeasonNodes.push({
+              id: teamSeasonId,
+              type: 'team-season',
+              label: `${record.TEAM_ABBREVIATION} ${record.SEASON_ID}`,
+              teamId: record.TEAM_ID,
+              teamAbbr: record.TEAM_ABBREVIATION,
+              season: record.SEASON_ID,
+            });
+          }
+        });
+
+        // Add new team-season nodes
         const existingIds = new Set(prevNodes.map(n => n.id));
         const nodesToAdd = teamSeasonNodes.filter(n => !existingIds.has(n.id));
+        
         // Preserve starting player's fixed position at (0, 0)
         const preservedNodes = prevNodes.map(n => {
           if (n.id === `player-${playerId}`) {
@@ -123,6 +133,7 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
         return [...preservedNodes, ...nodesToAdd];
       });
 
+      // Add links (separate from nodes update to avoid nested state updates)
       setLinks(prevLinks => {
         // Helper function to normalize link endpoints (handle both strings and objects)
         const getLinkKey = (link: GraphLink) => {
@@ -132,15 +143,31 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
         };
         
         const existingLinkKeys = new Set(prevLinks.map(getLinkKey));
+        
+        // Create links for all unique seasons
+        const newLinks: GraphLink[] = [];
+        uniqueSeasons.forEach((record) => {
+          const teamSeasonId = `team-${record.TEAM_ID}-${record.SEASON_ID}`;
+          newLinks.push({
+            source: `player-${targetPlayerId}` as any,
+            target: teamSeasonId as any,
+            season: record.SEASON_ID,
+            teamAbbr: record.TEAM_ABBREVIATION,
+          });
+        });
+        
         const uniqueNewLinks = newLinks.filter(
           l => !existingLinkKeys.has(getLinkKey(l))
         );
         return [...prevLinks, ...uniqueNewLinks];
       });
+
+      // Mark this player as expanded
+      setExpandedPlayers(prev => new Set([...prev, targetPlayerId]));
     } catch (error) {
-      console.error('Error loading player seasons:', error);
+      console.error(`Error loading player ${targetPlayerId} seasons:`, error);
     }
-  }, [playerId]);
+  }, [playerId, expandedPlayers]);
 
   // Load team roster when season node is clicked
   const loadTeamRoster = useCallback(async (teamId: number, season: string, teamAbbr?: string) => {
@@ -293,9 +320,9 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
     const graphNode = node as GraphNode;
     setSelectedNode(graphNode);
     
-    // If clicking the main player node, load their last 3 seasons
-    if (graphNode.type === 'player' && graphNode.playerId === playerId && !loadedTeamSeasons.size) {
-      loadPlayerSeasons(playerId);
+    // If clicking any player node, load their teams (if not already expanded)
+    if (graphNode.type === 'player' && graphNode.playerId) {
+      loadPlayerSeasons(graphNode.playerId);
     }
     
     // If clicking a team-season node, toggle expansion/collapse
@@ -310,7 +337,7 @@ export default function NbaGraph({ initialPlayerId }: NbaGraphProps) {
         loadTeamRoster(graphNode.teamId, graphNode.season, graphNode.teamAbbr);
       }
     }
-  }, [playerId, loadPlayerSeasons, loadTeamRoster, loadedTeamSeasons, collapseTeamRoster]);
+  }, [loadPlayerSeasons, loadTeamRoster, loadedTeamSeasons, collapseTeamRoster]);
 
   const nodeColor = useCallback((node: any) => {
     const graphNode = node as GraphNode;
